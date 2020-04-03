@@ -3,6 +3,7 @@ from sqlalchemy_utils.models import generic_repr
 from sqlalchemy.orm import object_session
 
 from enum import Enum
+import logging
 
 from .base import GFKBase, db, Column
 from .types import PseudoJSON
@@ -75,7 +76,14 @@ def get_object_changes(obj, reset=True):
     return result
 
 
-def track_changes(attributes):
+def get_relation_attr(source, target):
+    for key, item in inspect(source).relationships.items():
+        if item.entity.entity == target:
+            return key
+    return None
+
+
+def track_changes(attributes, parent=None):
     attributes = set(attributes) - {"id", "created_at", "updated_at", "version"}
 
     def decorator(cls):
@@ -103,15 +111,34 @@ def track_changes(attributes):
                 if not changes and (change_type == Change.Type.Modified):
                     return
 
+                obj = self
+                changes = {
+                    "type": change_type,
+                    "changes": changes,
+                }
+
+                if parent:
+                    parent_attr = get_relation_attr(parent, cls)
+                    changes["id"] = {
+                        "previous": self.id,
+                        "current": self.id,
+                    }
+                    changes = {
+                        "type": Change.Type.Modified,
+                        "changes": {
+                            parent_attr: [changes],
+                        },
+                    }
+
+                    parent_attr = get_relation_attr(cls, parent)
+                    obj = getattr(self, parent_attr, self)
+
                 session.add(
                     Change(
-                        object=self,
+                        object=obj,
                         object_version=getattr(self, "version", None),
                         user=changed_by,
-                        change={
-                            "type": change_type,
-                            "changes": changes,
-                        },
+                        change=changes,
                     )
                 )
 
